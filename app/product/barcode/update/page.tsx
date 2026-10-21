@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { supabase } from "@/lib/supabase";
 
@@ -13,6 +13,7 @@ type LocationOption = {
 };
 
 function StockUpdatePageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const prefilledBarcode = searchParams.get("barcode") ?? "";
   const [barcode, setBarcode] = useState(prefilledBarcode);
@@ -22,6 +23,14 @@ function StockUpdatePageContent() {
   const [loadingLocations, setLoadingLocations] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState("");
+
+  function handleCancel() {
+    setBarcode(prefilledBarcode || "");
+    setQuantity("1");
+    setLocationName(locations[0]?.name ?? "");
+    setStatus("");
+    router.push("/home");
+  }
 
   useEffect(() => {
     if (prefilledBarcode) {
@@ -187,13 +196,22 @@ function StockUpdatePageContent() {
             />
           </div>
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded-xl bg-emerald-500 px-4 py-3 font-medium text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {submitting ? "Updating..." : "Save stock update"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="flex-1 rounded-xl border border-white/10 bg-slate-800 px-4 py-3 font-medium text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex-1 rounded-xl bg-emerald-500 px-4 py-3 font-medium text-slate-950 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {submitting ? "Updating..." : "Save stock update"}
+            </button>
+          </div>
         </form>
 
         {status ? (
