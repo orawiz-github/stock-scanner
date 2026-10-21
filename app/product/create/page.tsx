@@ -1,6 +1,7 @@
 "use client";
 
 import { BrowserMultiFormatReader, type IScannerControls } from "@zxing/browser";
+import type { Exception, Result } from "@zxing/library";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
@@ -12,6 +13,7 @@ function ProductCreateContent() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controlsRef = useRef<IScannerControls | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [name, setName] = useState("");
   const [barcode, setBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -19,10 +21,45 @@ function ProductCreateContent() {
   const [mode, setMode] = useState<BarcodeMode>("manual");
   const [scanMessage, setScanMessage] = useState("Ready to scan");
   const [scanError, setScanError] = useState<string | null>(null);
+  const [cameraOptions, setCameraOptions] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    async function loadCameraOptions() {
+      if (!navigator.mediaDevices?.enumerateDevices) {
+        return;
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter((device) => device.kind === "videoinput");
+        setCameraOptions(videoDevices);
+
+        if (!selectedCameraId && videoDevices.length > 0) {
+          const preferred = videoDevices.find((device) => /back|rear/i.test(device.label)) ?? videoDevices[0];
+          setSelectedCameraId(preferred.deviceId);
+        }
+      } catch {
+        // Ignore device listing errors and continue using the default camera.
+      }
+    }
+
+    loadCameraOptions();
+  }, [selectedCameraId]);
 
   function stopScanner() {
     controlsRef.current?.stop();
     controlsRef.current = null;
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
   }
 
   async function startScanner() {
@@ -34,40 +71,48 @@ function ProductCreateContent() {
       return;
     }
 
+    const videoElement = videoRef.current;
+    if (!videoElement) {
+      setScanError("Camera video is not ready yet.");
+      setScanMessage("Waiting for camera...");
+      return;
+    }
+
     const reader = new BrowserMultiFormatReader();
+    const onDecode = (result: Result | undefined, error: Exception | undefined, controlsInstance: IScannerControls) => {
+      if (result) {
+        const code = result.getText();
+        if (code) {
+          setBarcode(code);
+          setScanMessage("Barcode captured");
+          setScanError(null);
+          controlsInstance?.stop();
+          stopScanner();
+          setMode("manual");
+        }
+      }
+
+      if (error && !/not found|no decode|checksum/i.test(String(error))) {
+        setScanError(error.message || "Scan failed");
+      }
+    };
 
     try {
-      const videoElement = videoRef.current;
-      if (!videoElement) {
-        setScanError("Camera video is not ready yet.");
-        setScanMessage("Waiting for camera... ");
-        return;
-      }
+      let controls: IScannerControls | null = null;
 
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter((device) => device.kind === "videoinput");
-      const deviceId = videoDevices.find((device) => /back|rear/i.test(device.label))?.deviceId ?? videoDevices[0]?.deviceId;
+      const preferredDeviceId = selectedCameraId ?? videoDevices.find((device) => /back|rear/i.test(device.label))?.deviceId ?? videoDevices[0]?.deviceId;
 
-      const controls = await reader.decodeFromVideoDevice(
-        deviceId,
-        videoElement,
-        (result, error, controlsInstance) => {
-          if (result) {
-            const code = result.getText();
-            if (code) {
-              setBarcode(code);
-              setScanMessage("Barcode captured");
-              setScanError(null);
-              controlsInstance?.stop();
-              setMode("manual");
-            }
-          }
+      if (preferredDeviceId && !selectedCameraId) {
+        setSelectedCameraId(preferredDeviceId);
+      }
 
-          if (error && !/not found|no decode|checksum/i.test(String(error))) {
-            setScanError(error.message || "Scan failed");
-          }
-        },
-      );
+      try {
+        controls = await reader.decodeFromVideoDevice(preferredDeviceId, videoElement, onDecode);
+      } catch {
+        controls = await reader.decodeFromVideoElement(videoElement, onDecode);
+      }
 
       controlsRef.current = controls;
       setScanMessage("Scanning... point your camera at a barcode");
@@ -76,7 +121,7 @@ function ProductCreateContent() {
       try {
         await videoElement.play();
       } catch {
-        // Ignore autoplay browser restrictions.
+        // Ignore autoplay restrictions.
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to access camera.";
@@ -92,9 +137,12 @@ function ProductCreateContent() {
       return;
     }
 
-    startScanner();
+    const timer = window.setTimeout(() => {
+      startScanner();
+    }, 150);
 
     return () => {
+      window.clearTimeout(timer);
       stopScanner();
     };
   }, [mode]);
@@ -191,18 +239,40 @@ function ProductCreateContent() {
         </div>
 
         {mode === "scan" ? (
-          <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-black">
-            <video
-              ref={videoRef}
-              className="h-60 w-full object-cover bg-black"
-              autoPlay
-              playsInline
-              muted
-            />
-            <div className="border-t border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-200">
-              {scanMessage}
+          <>
+            {cameraOptions.length > 1 ? (
+              <div className="mt-5">
+                <label htmlFor="camera-select" className="mb-2 block text-sm text-slate-300">
+                  Camera
+                </label>
+                <select
+                  id="camera-select"
+                  value={selectedCameraId ?? ""}
+                  onChange={(event) => setSelectedCameraId(event.target.value || undefined)}
+                  className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white focus:border-emerald-400 focus:outline-none"
+                >
+                  {cameraOptions.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Camera ${device.deviceId.slice(0, 6)}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+
+            <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-black">
+              <video
+                ref={videoRef}
+                className="h-60 w-full object-cover bg-black"
+                autoPlay
+                playsInline
+                muted
+              />
+              <div className="border-t border-white/10 bg-slate-900/80 px-3 py-2 text-sm text-slate-200">
+                {scanMessage}
+              </div>
             </div>
-          </div>
+          </>
         ) : null}
 
         {scanError ? (
