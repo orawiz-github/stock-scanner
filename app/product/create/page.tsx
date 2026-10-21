@@ -21,6 +21,7 @@ function ProductCreateContent() {
   const [mode, setMode] = useState<BarcodeMode>("manual");
   const [scanMessage, setScanMessage] = useState("Ready to scan");
   const [scanError, setScanError] = useState<string | null>(null);
+  const [lookupStatus, setLookupStatus] = useState<string>("");
   const [cameraOptions, setCameraOptions] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
   const [cameraChoice, setCameraChoice] = useState<string>("auto");
@@ -152,6 +153,7 @@ function ProductCreateContent() {
           controlsInstance?.stop();
           stopScanner();
           setMode("manual");
+          void lookupProductInfo(code);
         }
       }
 
@@ -234,6 +236,33 @@ function ProductCreateContent() {
     setMode("manual");
   }
 
+  async function lookupProductInfo(code: string) {
+    const trimmedCode = code.trim();
+    if (!trimmedCode) {
+      return;
+    }
+
+    setLookupStatus("Looking up product details...");
+
+    try {
+      const response = await fetch(`/api/barcode/lookup?barcode=${encodeURIComponent(trimmedCode)}`);
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setLookupStatus(payload.error || "Product lookup failed.");
+        return;
+      }
+
+      if (payload.title) {
+        setName(payload.title);
+      }
+
+      setLookupStatus(`Found product details from ${payload.source ?? "UPCitemdb"}.`);
+    } catch {
+      setLookupStatus("Unable to fetch product details right now.");
+    }
+  }
+
   function handleCancel() {
     stopScanner();
     setName("");
@@ -241,6 +270,7 @@ function ProductCreateContent() {
     setScanError(null);
     setScanMessage("Ready to scan");
     setStatus("");
+    setLookupStatus("");
     router.push("/home");
   }
 
@@ -385,13 +415,25 @@ function ProductCreateContent() {
             <label htmlFor="barcode" className="mb-2 block text-sm text-slate-300">
               Barcode
             </label>
-            <input
-              id="barcode"
-              value={barcode}
-              onChange={(event) => setBarcode(event.target.value)}
-              placeholder="1234567890123"
-              className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none"
-            />
+            <div className="flex gap-2">
+              <input
+                id="barcode"
+                value={barcode}
+                onChange={(event) => setBarcode(event.target.value)}
+                placeholder="1234567890123"
+                className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white placeholder:text-slate-500 focus:border-emerald-400 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => void lookupProductInfo(barcode)}
+                className="rounded-xl border border-emerald-500/50 bg-emerald-500/10 px-3 py-3 text-sm font-medium text-emerald-200"
+              >
+                Lookup
+              </button>
+            </div>
+            {lookupStatus ? (
+              <p className="mt-2 text-xs text-slate-300">{lookupStatus}</p>
+            ) : null}
           </div>
 
           <div className="flex gap-3">
