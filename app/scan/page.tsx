@@ -12,6 +12,32 @@ function ScanPageContent() {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("Preparing camera...");
   const [manualCode, setManualCode] = useState("");
+  const [cameraOptions, setCameraOptions] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
+  const [cameraChoice, setCameraChoice] = useState<string>("auto");
+
+  async function loadCameraOptions() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter((device) => device.kind === "videoinput");
+      setCameraOptions(videoDevices);
+
+      if (!selectedCameraId && videoDevices.length > 0) {
+        const preferred = videoDevices.find((device) => /back|rear|environment/i.test(device.label)) ?? videoDevices[0];
+        setSelectedCameraId(preferred.deviceId);
+      }
+    } catch {
+      // Ignore device-list errors and keep the default scan flow.
+    }
+  }
+
+  useEffect(() => {
+    void loadCameraOptions();
+  }, [selectedCameraId]);
 
   useEffect(() => {
     let mounted = true;
@@ -33,26 +59,47 @@ function ScanPageContent() {
 
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoDevices = devices.filter((device) => device.kind === "videoinput");
-        const deviceId = videoDevices.find((device) => /back|rear/i.test(device.label))?.deviceId ?? videoDevices[0]?.deviceId;
+        const preferredDeviceId = selectedCameraId ?? videoDevices.find((device) => /back|rear|environment/i.test(device.label))?.deviceId ?? videoDevices[0]?.deviceId;
 
-        const controls = await reader.decodeFromVideoDevice(
-          deviceId,
-          videoElement,
-          (result, error, controls) => {
-            if (result) {
-              const code = result.getText();
-              if (code) {
-                setStatus("Barcode scanned");
-                controls?.stop();
-                router.push(`/product/barcode?barcode=${encodeURIComponent(code)}`);
-              }
-            }
+        const explicitDeviceId = cameraChoice !== "auto" && cameraChoice !== "environment" && cameraChoice !== "user" ? cameraChoice : undefined;
 
-            if (error && !/not found|no decode|checksum/i.test(String(error))) {
-              setError(error.message || "Scan failed");
-            }
-          },
-        );
+        const controls = cameraChoice === "environment" || cameraChoice === "user"
+          ? await reader.decodeFromConstraints(
+              { video: { facingMode: { ideal: cameraChoice } } },
+              videoElement,
+              (result, error, controls) => {
+                if (result) {
+                  const code = result.getText();
+                  if (code) {
+                    setStatus("Barcode scanned");
+                    controls?.stop();
+                    router.push(`/product/barcode?barcode=${encodeURIComponent(code)}`);
+                  }
+                }
+
+                if (error && !/not found|no decode|checksum/i.test(String(error))) {
+                  setError(error.message || "Scan failed");
+                }
+              },
+            )
+          : await reader.decodeFromVideoDevice(
+              explicitDeviceId ?? preferredDeviceId,
+              videoElement,
+              (result, error, controls) => {
+                if (result) {
+                  const code = result.getText();
+                  if (code) {
+                    setStatus("Barcode scanned");
+                    controls?.stop();
+                    router.push(`/product/barcode?barcode=${encodeURIComponent(code)}`);
+                  }
+                }
+
+                if (error && !/not found|no decode|checksum/i.test(String(error))) {
+                  setError(error.message || "Scan failed");
+                }
+              },
+            );
 
         if (!mounted) {
           controls.stop();
@@ -83,7 +130,7 @@ function ScanPageContent() {
       mounted = false;
       controlsRef.current?.stop();
     };
-  }, [router]);
+  }, [router, selectedCameraId, cameraChoice]);
 
   return (
     <main className="min-h-screen bg-slate-950 px-4 py-6 text-white">
@@ -100,6 +147,37 @@ function ScanPageContent() {
           >
             Back
           </button>
+        </div>
+
+        <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+          <label htmlFor="scan-camera-select" className="mb-2 block text-sm text-slate-300">
+            Camera
+          </label>
+          <select
+            id="scan-camera-select"
+            value={cameraChoice}
+            onChange={(event) => {
+              const nextChoice = event.target.value;
+              setCameraChoice(nextChoice);
+
+              if (nextChoice === "auto" || nextChoice === "environment" || nextChoice === "user") {
+                setSelectedCameraId(undefined);
+                return;
+              }
+
+              setSelectedCameraId(nextChoice);
+            }}
+            className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white focus:border-emerald-400 focus:outline-none"
+          >
+            <option value="auto">Auto (recommended)</option>
+            {cameraOptions.map((device) => (
+              <option key={device.deviceId} value={device.deviceId}>
+                {device.label || `Camera ${device.deviceId.slice(0, 6)}`}
+              </option>
+            ))}
+            <option value="environment">Rear camera</option>
+            <option value="user">Front camera</option>
+          </select>
         </div>
 
         <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
