@@ -23,6 +23,7 @@ function ProductCreateContent() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [cameraOptions, setCameraOptions] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
+  const [cameraChoice, setCameraChoice] = useState<string>("auto");
 
   async function pickBestCameraId(devices: MediaDeviceInfo[]) {
     if (devices.length === 0) {
@@ -170,9 +171,21 @@ function ProductCreateContent() {
         setSelectedCameraId(preferredDeviceId);
       }
 
-      try {
-        controls = await reader.decodeFromVideoDevice(preferredDeviceId, videoElement, onDecode);
-      } catch {
+      const explicitDeviceId = cameraChoice !== "auto" && cameraChoice !== "environment" && cameraChoice !== "user" ? cameraChoice : undefined;
+
+      if (cameraChoice === "environment" || cameraChoice === "user") {
+        controls = await reader.decodeFromConstraints(
+          { video: { facingMode: { ideal: cameraChoice } } },
+          videoElement,
+          onDecode,
+        );
+      } else if (explicitDeviceId || preferredDeviceId) {
+        try {
+          controls = await reader.decodeFromVideoDevice(explicitDeviceId ?? preferredDeviceId, videoElement, onDecode);
+        } catch {
+          controls = await reader.decodeFromVideoElement(videoElement, onDecode);
+        }
+      } else {
         controls = await reader.decodeFromVideoElement(videoElement, onDecode);
       }
 
@@ -302,25 +315,36 @@ function ProductCreateContent() {
 
         {mode === "scan" ? (
           <>
-            {cameraOptions.length > 0 ? (
-              <div className="mt-5">
-                <label htmlFor="camera-select" className="mb-2 block text-sm text-slate-300">
-                  Camera
-                </label>
-                <select
-                  id="camera-select"
-                  value={selectedCameraId ?? ""}
-                  onChange={(event) => setSelectedCameraId(event.target.value || undefined)}
-                  className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white focus:border-emerald-400 focus:outline-none"
-                >
-                  {cameraOptions.map((device) => (
-                    <option key={device.deviceId} value={device.deviceId}>
-                      {device.label || `Camera ${device.deviceId.slice(0, 6)}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ) : null}
+            <div className="mt-5">
+              <label htmlFor="camera-select" className="mb-2 block text-sm text-slate-300">
+                Camera
+              </label>
+              <select
+                id="camera-select"
+                value={cameraChoice}
+                onChange={(event) => {
+                  const nextChoice = event.target.value;
+                  setCameraChoice(nextChoice);
+
+                  if (nextChoice === "auto" || nextChoice === "environment" || nextChoice === "user") {
+                    setSelectedCameraId(undefined);
+                    return;
+                  }
+
+                  setSelectedCameraId(nextChoice);
+                }}
+                className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-3 text-white focus:border-emerald-400 focus:outline-none"
+              >
+                <option value="auto">Auto (recommended)</option>
+                {cameraOptions.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || `Camera ${device.deviceId.slice(0, 6)}`}
+                  </option>
+                ))}
+                <option value="environment">Rear camera</option>
+                <option value="user">Front camera</option>
+              </select>
+            </div>
 
             <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-black">
               <video
