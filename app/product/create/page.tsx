@@ -24,28 +24,79 @@ function ProductCreateContent() {
   const [cameraOptions, setCameraOptions] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    async function loadCameraOptions() {
-      if (!navigator.mediaDevices?.enumerateDevices) {
-        return;
-      }
-
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter((device) => device.kind === "videoinput");
-        setCameraOptions(videoDevices);
-
-        if (!selectedCameraId && videoDevices.length > 0) {
-          const preferred = videoDevices.find((device) => /back|rear/i.test(device.label)) ?? videoDevices[0];
-          setSelectedCameraId(preferred.deviceId);
-        }
-      } catch {
-        // Ignore device listing errors and continue using the default camera.
-      }
+  async function pickBestCameraId(devices: MediaDeviceInfo[]) {
+    if (devices.length === 0) {
+      return undefined;
     }
 
-    loadCameraOptions();
-  }, [selectedCameraId]);
+    const ranked = await Promise.all(
+      devices.map(async (device) => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              deviceId: { exact: device.deviceId },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          });
+
+          const settings = stream.getVideoTracks()[0]?.getSettings();
+          const pixels = (settings?.width ?? 0) * (settings?.height ?? 0);
+          stream.getTracks().forEach((track) => track.stop());
+
+          return {
+            device,
+            pixels,
+            rearPriority: /back|rear|environment/i.test(device.label) ? 1 : 0,
+          };
+        } catch {
+          return {
+            device,
+            pixels: 0,
+            rearPriority: /back|rear|environment/i.test(device.label) ? 1 : 0,
+          };
+        }
+      }),
+    );
+
+    ranked.sort((a, b) => {
+      if (b.rearPriority !== a.rearPriority) {
+        return b.rearPriority - a.rearPriority;
+      }
+      return b.pixels - a.pixels;
+    });
+
+    return ranked[0]?.device.deviceId;
+  }
+
+  async function loadCameraOptions() {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      return;
+    }
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter((device) => device.kind === "videoinput");
+      setCameraOptions(videoDevices);
+
+      if (!selectedCameraId && videoDevices.length > 0) {
+        const preferred = await pickBestCameraId(videoDevices);
+        if (preferred) {
+          setSelectedCameraId(preferred);
+        }
+      }
+    } catch {
+      // Ignore device listing errors and continue using the default camera.
+    }
+  }
+
+  useEffect(() => {
+    if (mode !== "scan") {
+      return;
+    }
+
+    void loadCameraOptions();
+  }, [mode, selectedCameraId]);
 
   function stopScanner() {
     controlsRef.current?.stop();
@@ -69,6 +120,17 @@ function ProductCreateContent() {
       setScanError("This browser does not support camera access.");
       setScanMessage("Camera not available");
       return;
+    }
+
+    try {
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+        },
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+    } catch {
+      // Ignore permission preflight failures and continue with normal opening flow.
     }
 
     const videoElement = videoRef.current;
@@ -102,7 +164,7 @@ function ProductCreateContent() {
 
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter((device) => device.kind === "videoinput");
-      const preferredDeviceId = selectedCameraId ?? videoDevices.find((device) => /back|rear/i.test(device.label))?.deviceId ?? videoDevices[0]?.deviceId;
+      const preferredDeviceId = selectedCameraId ?? (await pickBestCameraId(videoDevices)) ?? videoDevices[0]?.deviceId;
 
       if (preferredDeviceId && !selectedCameraId) {
         setSelectedCameraId(preferredDeviceId);
@@ -240,7 +302,7 @@ function ProductCreateContent() {
 
         {mode === "scan" ? (
           <>
-            {cameraOptions.length > 1 ? (
+            {cameraOptions.length > 0 ? (
               <div className="mt-5">
                 <label htmlFor="camera-select" className="mb-2 block text-sm text-slate-300">
                   Camera
